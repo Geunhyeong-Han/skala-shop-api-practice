@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SKALA 몰 with 코코볼 </title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          'sk-red': '#E3000F',
+          'sk-orange': '#F66700',
+        }
+      }
+    }
+  };
+</script>
+</head>
+<body class="bg-gray-100 text-gray-800 min-h-screen">
+
+<!-- ===================== 헤더 ===================== -->
+<header class="sticky top-0 z-40 bg-white shadow-md">
+  <div class="h-1.5 bg-gradient-to-r from-sk-red to-sk-orange"></div>
+  <div class="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+    <div class="flex items-center gap-3">
+      <img src="/cocoball2.png" alt="코코볼" class="w-10 h-10 rounded-full object-cover ring-2 ring-sk-orange">
+      <h1 class="text-xl font-extrabold text-sk-red">SKALA 몰 <span class="text-sk-orange">with 코코볼</span></h1>
+    </div>
+
+    <div id="auth-area" class="flex items-center gap-2"></div>
+  </div>
+</header>
+
+<!-- ===================== 메인 ===================== -->
+<main class="max-w-6xl mx-auto px-4 py-6">
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+    <!-- 좌측: 상품 + 리뷰 -->
+    <section class="lg:col-span-2 space-y-4">
+      <div class="bg-white rounded-xl shadow p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-lg font-bold">🛍️ 상품 목록</h2>
+          <button id="toggle-product-form" class="text-sm px-3 py-1.5 rounded-lg bg-sk-red text-white hover:bg-red-700 transition">+ 상품 등록</button>
+        </div>
+
+        <form id="product-create-form" class="hidden mb-4 flex flex-wrap gap-2 items-end bg-gray-50 rounded-lg p-3">
+          <div class="flex-1 min-w-[140px]">
+            <label class="block text-xs text-gray-500 mb-1">상품명</label>
+            <input required name="name" type="text" class="w-full rounded-md border-gray-300 text-sm px-2 py-1.5" placeholder="예) 마이콜의 통기타">
+          </div>
+          <div class="w-32">
+            <label class="block text-xs text-gray-500 mb-1">가격(원)</label>
+            <input required name="price" type="number" min="1" class="w-full rounded-md border-gray-300 text-sm px-2 py-1.5" placeholder="99000">
+          </div>
+          <button type="submit" class="px-3 py-1.5 rounded-md bg-sk-orange text-white text-sm hover:bg-orange-600 transition">등록</button>
+        </form>
+
+        <div id="product-list" class="grid grid-cols-1 sm:grid-cols-2 gap-4"></div>
+      </div>
+    </section>
+
+    <!-- 우측: 내 주문 내역 -->
+    <aside class="lg:col-span-1">
+      <div class="bg-white rounded-xl shadow p-4 sticky top-24">
+        <h2 class="text-lg font-bold mb-3">📦 내 주문 내역</h2>
+        <div id="my-orders"></div>
+      </div>
+    </aside>
+  </div>
+</main>
+
+<!-- ===================== 토스트 ===================== -->
+<div id="toast-container" class="fixed bottom-6 right-6 z-50 flex flex-col gap-2"></div>
+
+<!-- ===================== 재사용 템플릿(빈 상태) ===================== -->
+<template id="cocoball-empty-template">
+  <div class="flex flex-col items-center justify-center text-center py-8 text-gray-500">
+    <img src="/cocoball2.png" alt="코코볼" class="w-16 h-16 rounded-full object-cover mb-3 opacity-90">
+    <p class="text-sm empty-state-message"></p>
+  </div>
+</template>
+
+<script>
+const $ = (selector, root = document) => root.querySelector(selector);
+const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+
+let currentCustomerId = null;
+
+/* ---------------------- 공통 API 래퍼 ---------------------- */
+async function api(path, { method = 'GET', body } = {}) {
+  const options = {
+    method,
+    credentials: 'include', // 백엔드가 JWT를 httpOnly 쿠키로 내려주므로 인증이 필요한 호출은 이 옵션이 필수입니다.
+    headers: {},
+  };
+
+  if (body !== undefined) {
+    options.headers['Content-Type'] = 'application/json';
+    options.body = JSON.stringify(body);
+  }
+
+  const response = await fetch(path, options);
+  const raw = await response.text();
+  const data = raw ? JSON.parse(raw) : null;
+
+  if (!response.ok) {
+    const error = new Error(data?.message || `요청에 실패했습니다. (${response.status})`);
+    error.code = data?.code;
+    error.status = response.status;
+    throw error;
+  }
+
+  return data;
+}
+
+/* ---------------------- 토스트 ---------------------- */
+function toast(message, type = 'success') {
+  const container = $('#toast-container');
+  const colors = {
+    success: 'bg-sk-orange',
+    error: 'bg-sk-red',
+  };
+
+  const el = document.createElement('div');
+  el.className = `${colors[type]} text-white text-sm font-medium px-4 py-2.5 rounded-lg shadow-lg transition-opacity duration-500 opacity-0`;
+  el.textContent = message;
+  container.appendChild(el);
+
+  requestAnimationFrame(() => el.classList.remove('opacity-0'));
+
+  setTimeout(() => {
+    el.classList.add('opacity-0');
+    setTimeout(() => el.remove(), 500);
+  }, 3000);
+}
+
+function handleError(error) {
+  if (error.code === 'INSUFFICIENT_FUNDS') {
+    toast('포인트가 모자라요! 담아둔 상품을 줄여볼까요? (' + error.message + ')', 'error');
+    return;
+  }
+  toast(error.message || '알 수 없는 오류가 발생했습니다.', 'error');
+}
+
+function renderEmptyState(container, message) {
+  const fragment = $('#cocoball-empty-template').content.cloneNode(true);
+  fragment.querySelector('.empty-state-message').textContent = message;
+  container.innerHTML = '';
+  container.appendChild(fragment);
+}
+
+function formatWon(amount) {
+  return amount.toLocaleString('ko-KR') + '원';
+}
+
+function formatDate(isoString) {
+  return new Date(isoString).toLocaleString('ko-KR', {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit',
+  });
+}
+
+/* ---------------------- 인증 영역 ---------------------- */
+function renderAuthArea() {
+  const area = $('#auth-area');
+
+  if (!currentCustomerId) {
+    area.innerHTML = `
+      <form id="login-form" class="flex items-center gap-1.5">
+        <input name="customerId" type="text" placeholder="고객 ID" required
+          class="w-24 sm:w-32 rounded-md border-gray-300 text-sm px-2 py-1.5">
+        <input name="customerPassword" type="password" placeholder="비밀번호" required
+          class="w-24 sm:w-32 rounded-md border-gray-300 text-sm px-2 py-1.5">
+        <button type="submit" class="px-3 py-1.5 rounded-md bg-sk-red text-white text-sm hover:bg-red-700 transition">로그인</button>
+        <button type="button" id="signup-toggle" class="px-3 py-1.5 rounded-md border border-sk-orange text-sk-orange text-sm hover:bg-orange-50 transition">회원가입</button>
+      </form>
+    `;
+    $('#login-form').addEventListener('submit', onLoginSubmit);
+    $('#signup-toggle').addEventListener('click', showSignupPrompt);
+    return;
+  }
+
+  area.innerHTML = `
+    <span class="text-sm px-3 py-1.5 rounded-full bg-gray-100 font-medium">🙋 ${currentCustomerId}</span>
+    <span id="point-badge" class="text-sm px-3 py-1.5 rounded-full bg-sk-orange/10 text-sk-orange font-bold"></span>
+    <button id="logout-btn" class="text-sm px-3 py-1.5 rounded-md border border-gray-300 hover:bg-gray-50 transition">로그아웃</button>
+  `;
+  $('#logout-btn').addEventListener('click', () => {
+    currentCustomerId = null;
+    renderAuthArea();
+    renderMyOrders(null);
+    toast('화면에서 로그아웃했어요. (쿠키는 만료 전까지 서버에 남아있어요)', 'success');
+  });
+}
+
+async function onLoginSubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const payload = {
+    customerId: form.customerId.value,
+    customerPassword: form.customerPassword.value,
+  };
+
+  try {
+    const result = await api('/api/customers/login', { method: 'POST', body: payload });
+    currentCustomerId = result.customerId;
+    toast(`${result.message} 반가워요~`);
+    renderAuthArea();
+    await loadMyOrders();
+  } catch (error) {
+    handleError(error);
+  }
+}
+
+function showSignupPrompt() {
+  const customerId = prompt('회원가입할 고객 ID를 입력하세요 (4~20자)');
+  if (!customerId) return;
+  const customerPassword = prompt('비밀번호를 입력하세요 (6~30자)');
+  if (!customerPassword) return;
+  signup(customerId, customerPassword);
+}
+
+async function signup(customerId, customerPassword) {
+  try {
+    const result = await api('/api/customers', {
+      method: 'POST',
+      body: { customerId, customerPassword },
+    });
+    toast(`${result.message} 초기 포인트 ${formatWon(result.customerPoint)} 지급! 이제 로그인해보세요~`);
+  } catch (error) {
+    handleError(error);
+  }
+}
+
+/* ---------------------- 내 주문 내역 ---------------------- */
+async function loadMyOrders() {
+  if (!currentCustomerId) {
+    renderMyOrders(null);
+    return;
+  }
+
+  try {
+    const data = await api('/api/customers/me');
+    renderMyOrders(data);
+    const badge = $('#point-badge');
+    if (badge) badge.textContent = `💰 ${formatWon(data.customerPoint)}`;
+  } catch (error) {
+    handleError(error);
+  }
+}
+
+function renderMyOrders(data) {
+  const container = $('#my-orders');
+
+  if (!currentCustomerId) {
+    renderEmptyState(container, '로그인하면 내 주문 내역을 볼 수 있어요~');
+    return;
+  }
+
+  if (!data || data.products.length === 0) {
+    renderEmptyState(container, '아직 주문한 상품이 없어요! 마음에 드는 상품을 담아볼까요?');
+    return;
+  }
+
+  container.innerHTML = data.products.map(item => `
+    <div class="flex items-center justify-between gap-2 py-3 border-b last:border-0">
+      <div class="min-w-0">
+        <p class="font-medium text-sm truncate">${item.productName}</p>
+        <p class="text-xs text-gray-500">${formatWon(item.unitPrice)} × ${item.quantity}개 = ${formatWon(item.totalPrice)}</p>
+      </div>
+      <button data-product-id="${item.productId}" data-quantity="${item.quantity}"
+        class="cancel-order-btn shrink-0 text-xs px-2.5 py-1.5 rounded-md bg-gray-100 hover:bg-sk-red hover:text-white transition">
+        취소
+      </button>
+    </div>
+  `).join('');
+
+  $$('.cancel-order-btn', container).forEach(btn => {
+    btn.addEventListener('click', () => cancelOrder(
+      Number(btn.dataset.productId),
+      Number(btn.dataset.quantity)
+    ));
+  });
+}
+
+async function placeOrder(productId, quantity) {
+  if (!currentCustomerId) {
+    toast('앗! 주문하려면 먼저 로그인해주세요~', 'error');
+    return;
+  }
+
+  try {
+    const result = await api('/api/customers/order', {
+      method: 'POST',
+      body: { productId, quantity },
+    });
+    toast(`${result.message} (남은 포인트 ${formatWon(result.remainingPoint)})`);
+    await loadMyOrders();
+  } catch (error) {
+    handleError(error);
+  }
+}
+
+async function cancelOrder(productId, quantity) {
+  try {
+    const result = await api('/api/customers/cancel', {
+      method: 'POST',
+      body: { productId, quantity },
+    });
+    toast(`${result.message} (남은 포인트 ${formatWon(result.remainingPoint)})`);
+    await loadMyOrders();
+  } catch (error) {
+    handleError(error);
+  }
+}
+
+/* ---------------------- 상품 ---------------------- */
+let products = [];
+const expandedReviewProductIds = new Set();
+
+async function loadProducts() {
+  try {
+    products = await api('/api/products');
+    renderProducts();
+  } catch (error) {
+    handleError(error);
+  }
+}
+
+function renderProducts() {
+  const container = $('#product-list');
+
+  if (products.length === 0) {
+    renderEmptyState(container, '등록된 상품이 없어요! 위에서 상품을 등록해보세요~');
+    return;
+  }
+
+  container.innerHTML = products.map(product => `
+    <div class="border rounded-lg p-3 flex flex-col gap-2" data-product-card="${product.id}">
+      <div class="flex items-start justify-between gap-2">
+        <div class="min-w-0">
+          <p class="font-semibold truncate">${product.name}</p>
+          <p class="text-sk-red font-bold text-sm">${formatWon(product.price)}</p>
+        </div>
+        <div class="flex gap-1 shrink-0">
+          <button class="edit-product-btn text-xs w-7 h-7 rounded-md bg-gray-100 hover:bg-gray-200" data-id="${product.id}" title="수정">✏️</button>
+          <button class="delete-product-btn text-xs w-7 h-7 rounded-md bg-gray-100 hover:bg-sk-red hover:text-white" data-id="${product.id}" title="삭제">🗑️</button>
+        </div>
+      </div>
+
+      <div class="edit-form-slot"></div>
+
+      <div class="flex items-center gap-1.5">
+        <input type="number" min="1" value="1" class="order-qty-input w-16 rounded-md border-gray-300 text-sm px-2 py-1">
+        <button class="order-btn flex-1 text-sm px-2 py-1.5 rounded-md bg-sk-orange text-white hover:bg-orange-600 transition" data-id="${product.id}">주문하기</button>
+      </div>
+
+      <button class="toggle-review-btn text-xs text-gray-500 hover:text-sk-red text-left" data-id="${product.id}">
+        💬 리뷰 보기
+      </button>
+      <div class="review-slot hidden" data-review-slot="${product.id}"></div>
+    </div>
+  `).join('');
+
+  $$('.order-btn', container).forEach(btn => {
+    btn.addEventListener('click', () => {
+      const card = btn.closest('[data-product-card]');
+      const qty = Number($('.order-qty-input', card).value) || 1;
+      placeOrder(Number(btn.dataset.id), qty);
+    });
+  });
+
+  $$('.delete-product-btn', container).forEach(btn => {
+    btn.addEventListener('click', () => deleteProduct(Number(btn.dataset.id)));
+  });
+
+  $$('.edit-product-btn', container).forEach(btn => {
+    btn.addEventListener('click', () => toggleEditForm(Number(btn.dataset.id)));
+  });
+
+  $$('.toggle-review-btn', container).forEach(btn => {
+    btn.addEventListener('click', () => toggleReviews(Number(btn.dataset.id)));
+  });
+
+  expandedReviewProductIds.forEach(id => loadReviews(id));
+}
+
+async function createProduct(event) {
+  event.preventDefault();
+  const form = event.target;
+  try {
+    await api('/api/products', {
+      method: 'POST',
+      body: { name: form.name.value, price: Number(form.price.value) },
+    });
+    toast('상품이 등록되었습니다.');
+    form.reset();
+    form.classList.add('hidden');
+    await loadProducts();
+  } catch (error) {
+    handleError(error);
+  }
+}
+
+function toggleEditForm(productId) {
+  const card = $(`[data-product-card="${productId}"]`);
+  const slot = $('.edit-form-slot', card);
+
+  if (slot.innerHTML) {
+    slot.innerHTML = '';
+    return;
+  }
+
+  const product = products.find(p => p.id === productId);
+  slot.innerHTML = `
+    <form class="edit-product-form flex flex-wrap gap-1.5 items-center bg-gray-50 rounded-md p-2">
+      <input name="name" value="${product.name}" required class="flex-1 min-w-[100px] rounded-md border-gray-300 text-sm px-2 py-1">
+      <input name="price" type="number" min="1" value="${product.price}" required class="w-24 rounded-md border-gray-300 text-sm px-2 py-1">
+      <button type="submit" class="text-xs px-2 py-1 rounded-md bg-sk-red text-white">저장</button>
+    </form>
+  `;
+  $('.edit-product-form', slot).addEventListener('submit', (event) => updateProduct(event, productId));
+}
+
+async function updateProduct(event, productId) {
+  event.preventDefault();
+  const form = event.target;
+  try {
+    await api(`/api/products/${productId}`, {
+      method: 'PUT',
+      body: { name: form.name.value, price: Number(form.price.value) },
+    });
+    toast('상품이 수정되었습니다.');
+    await loadProducts();
+  } catch (error) {
+    handleError(error);
+  }
+}
+
+async function deleteProduct(productId) {
+  if (!confirm('이 상품을 삭제할까요?')) return;
+  try {
+    await api(`/api/products/${productId}`, { method: 'DELETE' });
+    toast('상품이 삭제되었습니다.');
+    expandedReviewProductIds.delete(productId);
+    await loadProducts();
+  } catch (error) {
+    handleError(error);
+  }
+}
+
+/* ---------------------- 리뷰 ---------------------- */
+function toggleReviews(productId) {
+  const slot = $(`[data-review-slot="${productId}"]`);
+  const isHidden = slot.classList.contains('hidden');
+
+  if (isHidden) {
+    slot.classList.remove('hidden');
+    expandedReviewProductIds.add(productId);
+    loadReviews(productId);
+  } else {
+    slot.classList.add('hidden');
+    expandedReviewProductIds.delete(productId);
+  }
+}
+
+async function loadReviews(productId) {
+  const slot = $(`[data-review-slot="${productId}"]`);
+  if (!slot) return;
+
+  try {
+    const reviews = await api(`/api/reviews?productId=${productId}`);
+    renderReviews(slot, productId, reviews);
+  } catch (error) {
+    handleError(error);
+  }
+}
+
+function renderReviews(slot, productId, reviews) {
+  const listHtml = reviews.length === 0
+    ? `<p class="text-xs text-gray-400 py-2">아직 리뷰가 없어요. 첫 리뷰를 남겨보세요!</p>`
+    : reviews.map(review => `
+        <div class="border-t py-2 text-sm">
+          <div class="flex items-center justify-between">
+            <span class="font-medium">${review.customerId}</span>
+            <div class="flex items-center gap-2">
+              <span class="text-sk-orange">${'⭐'.repeat(review.rating)}</span>
+              ${review.customerId === currentCustomerId
+                ? `<button class="delete-review-btn text-xs text-gray-400 hover:text-sk-red" data-id="${review.id}">삭제</button>`
+                : ''}
+            </div>
+          </div>
+          <p class="text-gray-600 mt-0.5">${review.content}</p>
+          <p class="text-[11px] text-gray-400 mt-0.5">${formatDate(review.createdAt)}</p>
+        </div>
+      `).join('');
+
+  const formHtml = currentCustomerId
+    ? `
+      <form class="review-form flex flex-wrap gap-1.5 items-center mt-2 bg-gray-50 rounded-md p-2">
+        <select name="rating" class="rounded-md border-gray-300 text-sm px-1.5 py-1">
+          <option value="5">⭐⭐⭐⭐⭐</option>
+          <option value="4">⭐⭐⭐⭐</option>
+          <option value="3">⭐⭐⭐</option>
+          <option value="2">⭐⭐</option>
+          <option value="1">⭐</option>
+        </select>
+        <input name="content" type="text" placeholder="리뷰를 남겨주세요~" required maxlength="500"
+          class="flex-1 min-w-[100px] rounded-md border-gray-300 text-sm px-2 py-1">
+        <button type="submit" class="text-xs px-2.5 py-1.5 rounded-md bg-sk-orange text-white hover:bg-orange-600 transition">등록</button>
+      </form>
+    `
+    : `<p class="text-xs text-gray-400 mt-2">로그인하면 리뷰를 남길 수 있어요~</p>`;
+
+  slot.innerHTML = `<div class="mt-1">${listHtml}</div>${formHtml}`;
+
+  const form = $('.review-form', slot);
+  if (form) {
+    form.addEventListener('submit', (event) => createReview(event, productId));
+  }
+
+  $$('.delete-review-btn', slot).forEach(btn => {
+    btn.addEventListener('click', () => deleteReview(Number(btn.dataset.id), productId));
+  });
+}
+
+async function createReview(event, productId) {
+  event.preventDefault();
+  const form = event.target;
+  try {
+    await api('/api/reviews', {
+      method: 'POST',
+      body: {
+        productId,
+        rating: Number(form.rating.value),
+        content: form.content.value,
+      },
+    });
+    toast('리뷰가 등록되었습니다!');
+    await loadReviews(productId);
+  } catch (error) {
+    handleError(error);
+  }
+}
+
+async function deleteReview(reviewId, productId) {
+  if (!confirm('리뷰를 삭제할까요?')) return;
+  try {
+    await api(`/api/reviews/${reviewId}`, { method: 'DELETE' });
+    toast('리뷰가 삭제되었습니다.');
+    await loadReviews(productId);
+  } catch (error) {
+    handleError(error);
+  }
+}
+
+/* ---------------------- 초기화 ---------------------- */
+$('#toggle-product-form').addEventListener('click', () => {
+  $('#product-create-form').classList.toggle('hidden');
+});
+$('#product-create-form').addEventListener('submit', createProduct);
+
+renderAuthArea();
+renderMyOrders(null);
+loadProducts();
+</script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+spring:
+  application:
+    name: shop-api
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+  sql:
+    init:
+      mode: never
+
+jwt:
+  cookie-name: bff-access
+  secret: ${JWT_SECRET:U0tBTEEtU0hPUC1KV1QtU0VDUkVULUtFWS0yMDI2ISE=}
+  expiration-minutes: 60
